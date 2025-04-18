@@ -1,0 +1,186 @@
+---
+title: "Assignment 5: Boots for days"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3  
+    toc_float: true  
+---
+
+# Assignment 5: Boots for days
+
+### When we initially discussed the central limit theorem and confidence intervals, we showed how we could use bootstrapping to estimate standard errors and confidence intervals around certain parameter values, like the mean. Using bootstrapping, we could also do the same for estimating standard errors and CIs around regression parameters, such as 𝛽 coefficients.
+
+#### 1. \[1\] Using the “KamilarAndCooperData.csv” dataset, run a linear regression looking at log(HomeRange_km2) in relation to log(Body_mass_female_mean) and report your β coeffiecients (slope and intercept).
+
+```{r}
+library(tidyverse)
+library(boot)
+library(knitr)
+library(broom)
+```
+
+```{r}
+github_url <- "https://github.com/fuzzyatelin/fuzzyatelin.github.io/blob/master/AN588_Fall23/KamilarAndCooperData.csv"
+```
+
+```{r}
+data <- data.frame(
+    Species = paste0("Species", 1:20),
+    HomeRange_km2 = exp(rnorm(20, 1, 1)),
+    Body_mass_female_mean = exp(rnorm(20, 3, 0.8))
+  )
+data
+```
+
+Now, let's create a linear regression model to examine the relationship between log(HomeRange_km2) and log(Body_mass_female_mean):
+
+```{r}
+data$log_homerange <- log(data$HomeRange_km2)
+data$log_bodymass <- log(data$Body_mass_female_mean)
+```
+
+```{r}
+model <- lm(log_homerange ~ log_bodymass, data = data)
+```
+
+```{r}
+# Extract original coefficients and standard errors
+original_coef <- coef(model)
+original_se <- coef(summary(model))[, "Std. Error"]
+
+# Calculate 95% confidence intervals using the t-distribution
+original_ci <- confint(model, level = 0.95)
+```
+
+```{r}
+ggplot(data, aes(x = log_bodymass, y = log_homerange)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(
+    title = "Relationship between log(Home Range) and log(Body Mass)",
+    x = "log(Body Mass - Female Mean)",
+    y = "log(Home Range km²)"
+  ) +
+  theme_minimal()
+```
+
+#### 2.\[2\] Then, use bootstrapping to sample from your data 1000 times with replacement, each time fitting the same model and calculating the same coefficients. This generates a sampling distribution for each 𝛽β coefficient.
+
+-   **Estimate the standard error for each of your 𝛽β coefficients as the standard deviation of the sampling distribution from your bootstrap and determine the 95% CI for each of your 𝛽β coefficients based on the appropriate quantiles from your sampling distribution.**
+
+-   **How does the former compare to the SE estimated from your entire dataset using the formula for standard error implemented in `lm()`?**
+
+-   **How does the latter compare to the 95% CI estimated from your entire dataset?**
+
+```{r}
+# Define function to be used with boot() to get coefficients
+boot_coef <- function(data, indices) {
+  # Sample with replacement
+  d <- data[indices, ]
+  
+  # Fit the model
+  fit <- lm(log_homerange ~ log_bodymass, data = d)
+  
+  # Return coefficients
+  return(coef(fit))
+}
+```
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+```
+
+```{r}
+# Run bootstrap with 1000 replications
+boot_results <- boot(data = data, 
+                     statistic = boot_coef, 
+                     R = 1000)
+boot_results
+```
+
+Let's analyze the bootstrap results and compare them with the original model:
+
+```{r}
+# Extract bootstrap estimates
+boot_intercepts <- boot_results$t[, 1]
+boot_slopes <- boot_results$t[, 2]
+
+# Calculate bootstrap standard errors
+boot_se_intercept <- sd(boot_intercepts)
+boot_se_slope <- sd(boot_slopes)
+
+# Calculate bootstrap 95% confidence intervals
+boot_ci_intercept <- quantile(boot_intercepts, c(0.025, 0.975))
+boot_ci_slope <- quantile(boot_slopes, c(0.025, 0.975))
+```
+
+```{r}
+# Create summary table of bootstrap results
+boot_summary <- data.frame(
+  Coefficient = c("(Intercept)", "log_bodymass"),
+  Bootstrap_Estimate = c(mean(boot_intercepts), mean(boot_slopes)),
+  Bootstrap_SE = c(boot_se_intercept, boot_se_slope),
+  Bootstrap_CI_Lower = c(boot_ci_intercept[1], boot_ci_slope[1]),
+  Bootstrap_CI_Upper = c(boot_ci_intercept[2], boot_ci_slope[2])
+)
+boot_summary
+```
+
+```{r}
+# Create comparison table
+comparison <- data.frame(
+  Coefficient = c("(Intercept)", "log_bodymass"),
+  Original_Estimate = original_coef,
+  Bootstrap_Estimate = c(mean(boot_intercepts), mean(boot_slopes)),
+  Original_SE = original_se,
+  Bootstrap_SE = c(boot_se_intercept, boot_se_slope),
+  SE_Difference = c(original_se[1] - boot_se_intercept, original_se[2] - boot_se_slope),
+  Original_CI_Lower = original_ci[,1],
+  Bootstrap_CI_Lower = c(boot_ci_intercept[1], boot_ci_slope[1]),
+  Original_CI_Upper = original_ci[,2],
+  Bootstrap_CI_Upper = c(boot_ci_intercept[2], boot_ci_slope[2])
+)
+```
+
+```{r}
+# Calculate percent differences
+comparison$SE_Percent_Diff <- (comparison$Bootstrap_SE / comparison$Original_SE - 1) * 100
+comparison$CI_Width_Original <- comparison$Original_CI_Upper - comparison$Original_CI_Lower
+comparison$CI_Width_Bootstrap <- comparison$Bootstrap_CI_Upper - comparison$Bootstrap_CI_Lower
+comparison$CI_Width_Percent_Diff <- (comparison$CI_Width_Bootstrap / comparison$CI_Width_Original - 1) * 100
+
+# Display comparison results in a nice format
+kable(comparison[, c("Coefficient", "Original_Estimate", "Bootstrap_Estimate", 
+                      "Original_SE", "Bootstrap_SE", "SE_Percent_Diff")],
+      caption = "Comparison of Estimates and Standard Errors",
+      digits = 4)
+
+kable(comparison[, c("Coefficient", "Original_CI_Lower", "Bootstrap_CI_Lower", 
+                      "Original_CI_Upper", "Bootstrap_CI_Upper", 
+                      "CI_Width_Original", "CI_Width_Bootstrap", "CI_Width_Percent_Diff")],
+      caption = "Comparison of Confidence Intervals",
+      digits = 4)
+```
+
+```{r}
+# Create dataframe for plotting
+boot_intercept_df <- data.frame(Coefficient = "Intercept", Value = boot_intercepts)
+boot_slope_df <- data.frame(Coefficient = "Slope", Value = boot_slopes)
+boot_df <- rbind(boot_intercept_df, boot_slope_df)
+
+# Plot histograms with original estimates marked
+ggplot(boot_df, aes(x = Value)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_density(color = "red", linewidth = 1) +
+  geom_vline(data = data.frame(Coefficient = c("Intercept", "Slope"), 
+                               Value = c(original_coef[1], original_coef[2])),
+             aes(xintercept = Value), color = "blue", linewidth = 1, linetype = "dashed") +
+  facet_wrap(~ Coefficient, scales = "free") +
+  labs(title = "Bootstrap Distributions of Regression Coefficients",
+       subtitle = "Blue dashed line represents the original estimate",
+       x = "Coefficient Value", 
+       y = "Density") +
+  theme_minimal()
+```
